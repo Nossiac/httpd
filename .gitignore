@@ -1,0 +1,8 @@
+*.o
+*.d
+*.tmp
+*.log
+*.exe
+*.bak
+build/
+log/
