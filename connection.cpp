@@ -436,24 +436,3 @@ size_t Connection::write(Response &rsp)
     return this->write(this->txbuf.data(), this->txbuf.size());
 }
 
-
-bool Connection::handlePending()
-{
-    size_t ret = 0;
-    ret = this->_write(this->sock, this->pending.data(), this->pending.size(), 0);
-    if (ret < 0)
-    {
-        DEBUG("error %s, ", strerror(errno));
-        return false;
-    }
-    else if (ret == this->pending.size())
-    {
-        this->writeagain(false);
-        return true;
-    }
-    else
-    {
-        return false;
-    }
-}
-

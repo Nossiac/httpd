@@ -24,7 +24,6 @@ private:
 
     buffer rxbuf;
     buffer txbuf;
-    buffer pending;
 
     bool handleHttpGet(Request & req, Response & rsp);
     bool handleHttpPost(Request & req, Response & rsp);
@@ -36,7 +35,6 @@ public:
 
     const int sock;
     void handleStream();
-    bool handlePending();
     inline void peerclosed(bool closed)
     {
         this->__peerclosed = closed;
@@ -44,14 +42,6 @@ public:
     inline bool peerclosed()
     {
         return this->__peerclosed;
-    };
-    inline void writeagain(bool closed)
-    {
-        this->__writeagain = closed;
-    };
-    inline bool writeagain()
-    {
-        return this->__writeagain;
     };
     inline bool shouldclose()
     {

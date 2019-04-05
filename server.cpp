@@ -179,7 +179,6 @@ void ServerImplEpoll::run()
     #define MAXEVENT (32)
     int nfds, i;
     struct epoll_event events[MAXEVENT];
-    struct epoll_event ev;
     list<Connection *>::iterator iter;
     int ms = 10000;
     Connection * conn = NULL;
@@ -213,28 +212,9 @@ void ServerImplEpoll::run()
                 if (conn->peerclosed() || conn->shouldclose())
                 {
                     epoll_ctl(this->epfd, EPOLL_CTL_DEL, conn->sock, 0);
-                    //this->connections.erase(iter++);
                     this->connections.remove(conn);
                     delete conn;
                     continue;
-                }
-                if (conn->writeagain())
-                {
-                    struct epoll_event ev;
-                    ev.data.fd = sock;
-                    ev.events = EPOLLOUT | EPOLLET;
-                    epoll_ctl(this->epfd, EPOLL_CTL_MOD, sock, &ev);
-                }
-            }
-            else if(events[i].events & EPOLLOUT)
-            {
-                conn = getConnection(events[i].data.fd);
-                if(conn && conn->handlePending())
-                {
-                    /* ok, job done */
-                    ev.data.fd = sock;
-                    ev.events = EPOLLIN | EPOLLET;
-                    epoll_ctl(this->epfd, EPOLL_CTL_MOD, sock, &ev);
                 }
             }
         }
