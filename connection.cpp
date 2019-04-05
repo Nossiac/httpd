@@ -7,6 +7,8 @@
 #include <cstdio>
 #include <iostream>
 #include <cstring>
+#include <string>
+#include <sstream>
 #include <errno.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -15,6 +17,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <time.h>
 
 #include "common.hpp"
 #include "stream.hpp"
@@ -24,13 +27,15 @@
 using namespace std;
 
 #define RXBUF_LEN (32)
-
+#define MAX_SEND_RETRY (100)
 
 
 Connection::Connection(int sock) : sock(sock)
 {
     this->__peerclosed = false;
     this->rxbuf.capacity(RXBUF_LEN);
+    this->bytes_sent = 0;
+    this->bytes_recv = 0;
 }
 
 
@@ -51,15 +56,18 @@ bool Connection::handleHttpGet(Request & req, Response & rsp)
     string filepath = req.getURI();
     struct stat filestat;
     FILE * fp = NULL;
-    size_t filesize;
     char buf[1024];
+    size_t from = 0;
+    size_t to = 0;
+    size_t total = 0;
+    size_t done = 0;
+    string range = req.getOption("Range");
 
     if (filepath[0] == '/')
         filepath = "."+req.getURI();
-    else
 
     /* if the uri is a regular file */
-
+    DEBUG("client request file : %s", filepath.c_str());
     ret = stat(filepath.c_str(), &filestat);
     if (ret != 0)
     {
@@ -100,6 +108,56 @@ bool Connection::handleHttpGet(Request & req, Response & rsp)
         }
     }
 
+    /* Range */
+    if (range.empty())
+    {
+        total = filestat.st_size;
+        from = 0;
+        to = total - 1;
+    }
+    else
+    {
+        std::ostringstream ss;
+        const char * p = range.c_str();
+        /* figure out FROM-TO */
+        do
+        {
+            // bytes=-200
+            ret = sscanf(p,"bytes=-%zu", &to);
+            if (ret == 1)
+            {
+                from = 0;
+                break;
+            }
+            // bytes=100-200
+            ret = sscanf(p,"bytes=%zu-%zu", &from, &to);
+            if (ret == 2)
+            {
+                break;
+            }
+            // bytes=200-
+            ret = sscanf(p,"bytes=%zu-", &from);
+            if (ret == 1)
+            {
+                to = filestat.st_size-1;
+                break;
+            }
+        }
+        while (0);
+
+
+
+        total = to - from + 1;
+        ss<<"bytes "<<from<<'-'<<to<<'/'<<filestat.st_size;
+
+        DEBUG("client req from %zu to %zu, total %zu bytes", from, to, total);
+        rsp.setCode(206);
+        rsp.setOption("Content-Range", ss.str().c_str());
+    }
+
+    rsp.setOption("Content-Length", total);
+    rsp.setOption("Accept-Ranges", "bytes");
+
     fp = fopen(filepath.c_str(), "rb");
     if (!fp)
     {
@@ -108,11 +166,6 @@ bool Connection::handleHttpGet(Request & req, Response & rsp)
         goto __quit_true;
     }
 
-    fseek(fp, 0, SEEK_END);
-    filesize = ftell(fp);
-    fseek(fp, 0, SEEK_SET);
-
-    rsp.setOption("Content-Length", filesize);
 
     /* write response header! */
     ret = this->write(rsp);
@@ -124,18 +177,33 @@ bool Connection::handleHttpGet(Request & req, Response & rsp)
 
 
     /* write file data! */
-    while(!feof(fp))
+    fseek(fp, from, SEEK_SET);
+    done = 0;
+    while(!feof(fp) && done < total)
     {
-        ret = fread(buf, 1, 1024, fp);
-        if (!this->write(buf, ret))
+        size_t read = 0;
+        size_t sent = 0;
+        if (total-done < sizeof(buf))
+            read = fread(buf, 1, total-done, fp);
+        else
+            read = fread(buf, 1, sizeof(buf), fp);
+        ASSERT(read >= 0);
+        //DEBUG("done %zu, total %zu", done, total);
+
+        sent = this->write(buf, read);
+        if (sent != read)
             goto __quit_false;
+        done += sent;
     }
+    DEBUG("done %zu, total %zu", done, total);
+    ASSERT(done == total);
 
 __quit_true:
     if (fp) fclose(fp);
     return true;
 
 __quit_false:
+    DEBUG("Error happend: %s, done %zu, total %zu", strerror(errno), done, total);
     if (fp) fclose(fp);
     return false;
 }
@@ -174,20 +242,8 @@ void Connection::handleStream()
     Request req;
     Response rsp;
 
-#if 0
-    int len = recv(this->sock, this->rxbuf.data(), this->rxbuf.capacity(), 0);
-    if (0 == len)
-    {
-        this->peerclosed(true);
-        return;
-    }
-    this->rxbuf.size(len);
-#else
     if (this->read() <= 0)
         return;
-#endif
-
-    dumphex(NULL, this->rxbuf.data(), this->rxbuf.size());
 
     /* if current data is correct but insufficient to build a request,
     we keep the data in buffer, return.
@@ -202,7 +258,6 @@ void Connection::handleStream()
 
     if (req.buildRequest(this->rxbuf.data(), this->rxbuf.size()))
     {
-        req.dump();
         this->handleRequest(req, rsp);
     }
     else
@@ -241,6 +296,7 @@ size_t Connection::read()
         ret = recv(this->sock, buffer, buflen, 0);
         if (0 == ret)
         {
+            DEBUG("socket closed by peer!");
             this->peerclosed(true);
             break;
         }
@@ -266,16 +322,28 @@ size_t Connection::read()
             if (this->rxbuf.size()*2 > this->rxbuf.capacity())
                 this->rxbuf.capacity(this->rxbuf.capacity()*2);
         }
-    } while (!this->blocking());
+    }
+    while (!this->blocking());
 
+    this->bytes_recv += total;
     return total;
 }
 
 
-bool Connection::write(void * pvdata, int len)
+size_t Connection::_write(int sock, void * pvdata, int len, int flags)
 {
-    int ret = -1;
+    ssize_t ret = send(this->sock, pvdata, len, 0);
+    if (ret>0) this->bytes_sent += (size_t)ret;
+    return ret;
+}
+
+size_t Connection::write(void * pvdata, int len)
+{
+    size_t todo = len;
+    size_t done = 0;
+    ssize_t ret = -1;
     unsigned char * p = reinterpret_cast<unsigned char *>(pvdata);
+    int retry = 0;
 
     /* send will return:
           1) len, if everything is fine.
@@ -288,7 +356,7 @@ bool Connection::write(void * pvdata, int len)
     */
 
 __again:
-    ret = send(this->sock, p, len, 0);
+    ret = this->_write(this->sock, p, todo, 0);
     if (ret < 0)
     {
         if(errno == EINTR)
@@ -299,27 +367,47 @@ __again:
         {
             this->peerclosed(true);
             this->shouldclose(true);
-            return false;
+            return ret;
         }
         else if (errno == EAGAIN || errno == EWOULDBLOCK)
         {
-            /* time to epoll for write */
-            /* not an easy job */
-            this->writeagain(true);
-            return true;
+            /* A more elegant solution would be using epoll to monitor EPOLLOUT, but NO, I just keep it simple! */
+            struct timespec inteval;
+            inteval.tv_sec = 0;
+            inteval.tv_nsec = 100000;
+            nanosleep(&inteval, NULL);
+
+            if (retry++ < MAX_SEND_RETRY)
+                goto __again;
+            else
+                return done>0?done:ret;
         }
         else
         {
-            return false;
+            ERROR("error: %s", strerror(errno));
+            return ret;
         }
     }
+    else if ((size_t)ret != todo)
+    {
+        p += ret;
+        done += ret;
+        todo -= ret;
+        retry ++;
+        goto __again;
+    }
+    else
+    {
+        done += ret;
+    }
 
+    ASSERT(done == (size_t)len);
     //dumphex(NULL, p, len);
 
-    return true;
+    return done;
 }
 
-bool Connection::write(Response &rsp)
+size_t Connection::write(Response &rsp)
 {
     this->txbuf.clear();
     this->txbuf.append(rsp.version.c_str(), rsp.version.size());
@@ -345,8 +433,6 @@ bool Connection::write(Response &rsp)
     }
     this->txbuf.append("\r\n", 2);
 
-    rsp.dump();
-
     return this->write(this->txbuf.data(), this->txbuf.size());
 }
 
@@ -354,8 +440,13 @@ bool Connection::write(Response &rsp)
 bool Connection::handlePending()
 {
     size_t ret = 0;
-    ret = send(this->sock, this->pending.data(), this->pending.size(), 0);
-    if (ret == this->pending.size())
+    ret = this->_write(this->sock, this->pending.data(), this->pending.size(), 0);
+    if (ret < 0)
+    {
+        DEBUG("error %s, ", strerror(errno));
+        return false;
+    }
+    else if (ret == this->pending.size())
     {
         this->writeagain(false);
         return true;

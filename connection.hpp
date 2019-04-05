@@ -31,6 +31,9 @@ private:
     bool handleRequest(Request & req, Response & rsp);
 
 public:
+    size_t bytes_sent;
+    size_t bytes_recv;
+
     const int sock;
     void handleStream();
     bool handlePending();
@@ -58,8 +61,9 @@ public:
     {
         this->__shouldclose = closed;
     };
-    bool write(void * pvdata, int len);
-    bool write(Response &rsp);
+    size_t _write(int sock, void * pvdata, int len, int flags);
+    size_t write(void * pvdata, int len);
+    size_t write(Response &rsp);
     size_t read();
     bool blocking();
 
