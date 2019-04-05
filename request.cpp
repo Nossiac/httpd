@@ -104,4 +104,23 @@ string Request::getHost()
 }
 
 
+#ifdef __DEBUG__
+void Request::dump()
+{
+    DEBUG("method: %d", this->getMethod());
+    DEBUG("uri: %s", this->getURI().c_str());
+    DEBUG("version: %s", this->getVersion().c_str());
+
+    http_options::iterator it;
+
+    for ( it = this->options.begin(); it != this->options.end(); it++ )
+    {
+        std::cout << "\t"
+                  << it->first
+                  << ": "
+                  << it->second
+                  << std::endl ;
+    }
+}
+#endif
 

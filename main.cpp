@@ -43,6 +43,9 @@ void usage()
     printf("shttpd [options]\n");
     printf("    -h         display help message.\n");
     printf("    -D         daemon mode.\n");
+    #ifdef __DEBUG__
+    printf("    -d <level> set debug level [%d~%d].\n", DBG_LVL_NONE, DBG_LVL_VERBOSE);
+    #endif
     #ifdef __linux__
     printf("    -m <mode>  mode = epoll | select, default epoll.\n");
     #endif
@@ -69,7 +72,11 @@ int main(int argc, char ** argv)
             case 'l':
                 logfile = optarg;
                 break;
-
+#ifdef __DEBUG__
+            case 'd':
+                __dbg_lvl__ = atoi(optarg);
+                break;
+#endif
 #ifdef __linux__
             case 'm':
                 if (optarg[0] != 'e')

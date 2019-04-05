@@ -45,7 +45,9 @@ public:
     void setCode(int code);
     void setVersion(std::string httpver);
 
-    void dump() {}
+#ifdef __DEBUG__
+    void dump();
+#endif
 };
 
 #endif /* __RESPONSE_HPP__ */

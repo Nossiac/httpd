@@ -45,7 +45,9 @@ public:
     std::string getVersion();
     std::string getURI();
     std::string getHost();
-    void dump() {}
+#ifdef __DEBUG__
+    void dump();
+#endif
 };
 
 #endif /* __REQUEST_HPP__ */

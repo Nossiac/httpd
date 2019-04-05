@@ -223,5 +223,11 @@ void Response::setCode(int code)
     }
 }
 
+#ifdef __DEBUG__
+void Response::dump()
+{
+    DEBUG("rsp code: %d", this->code);
+}
+#endif
 
 
